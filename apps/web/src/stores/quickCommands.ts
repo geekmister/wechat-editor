@@ -31,7 +31,7 @@ const DEFAULT_COMMANDS: QuickCommandPersisted[] = [
   { id: `summary`, label: `总结`, template: `请对以下内容进行总结：\n\n{{sel}}` },
 ]
 
-export const useQuickCommands = defineStore(`quickCommands`, () => {
+export const useQuickCommandsStore = defineStore(`quickCommands`, () => {
   // ---------- state ----------
   const commands = ref<QuickCommandRuntime[]>([])
 
@@ -43,7 +43,7 @@ export const useQuickCommands = defineStore(`quickCommands`, () => {
     await store.setJSON(STORAGE_KEY, toSave)
   }
 
-  async function load() {
+  async function reloadFromStorage() {
     const parsed = await store.getJSON<QuickCommandPersisted[]>(STORAGE_KEY)
 
     if (parsed && Array.isArray(parsed)) {
@@ -79,8 +79,8 @@ export const useQuickCommands = defineStore(`quickCommands`, () => {
   }
 
   // ---------- init ----------
-  load()
+  reloadFromStorage()
   watch(commands, save, { deep: true })
 
-  return { commands, add, update, remove }
+  return { commands, add, update, remove, reloadFromStorage }
 })

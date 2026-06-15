@@ -1,18 +1,33 @@
 <script setup lang="ts">
-import { CheckSquare, ChevronsDownUp, ChevronsUpDown, Ellipsis, FileText, Plus, Regex, Replace, ReplaceAll, Search, X } from 'lucide-vue-next'
+import { CheckSquare, ChevronsDownUp, ChevronsUpDown, Download, Ellipsis, FileText, Plus, Regex, Replace, ReplaceAll, Search, Upload, X } from '@lucide/vue'
 import { useConfirmStore } from '@/stores/confirm'
 import { useEditorStore } from '@/stores/editor'
 import { usePostStore } from '@/stores/post'
 import { useUIStore } from '@/stores/ui'
-import { addPrefix, downloadMD, exportPostsAsZip } from '@/utils'
-import { store } from '@/utils/storage'
+import { downloadMD, exportPostsAsZip } from '@/utils/export-content'
+import {
+  getPostSliderDropdownContentProps,
+  providePostSliderMenu,
+  updatePostSliderMenuOpen,
+} from './postSliderMenu'
 
 const confirmStore = useConfirmStore()
 const uiStore = useUIStore()
 const { isMobile, isOpenPostSlider } = storeToRefs(uiStore)
+const { toggleShowImportMdDialog } = uiStore
+
+const postSliderMenu = providePostSliderMenu()
+const { openMenuKey } = postSliderMenu
+
+const headerMenuOpen = computed(() => openMenuKey.value === `header`)
+function onHeaderMenuOpenChange(open: boolean) {
+  updatePostSliderMenuOpen(postSliderMenu, `header`, open)
+}
+
+const headerDropdownProps = computed(() => getPostSliderDropdownContentProps(isMobile.value, `w-48`))
 
 const postStore = usePostStore()
-const { posts } = storeToRefs(postStore)
+const { posts, sortMode } = storeToRefs(postStore)
 
 const editorStore = useEditorStore()
 const { editor } = storeToRefs(editorStore)
@@ -21,16 +36,17 @@ const { editor } = storeToRefs(editorStore)
 const enableAnimation = ref(false)
 
 // 监听 PostSlider 开关状态变化
-watch(isOpenPostSlider, () => {
-  if (isMobile.value) {
-    // 在移动端，用户操作时启用动画
+watch(isOpenPostSlider, (open) => {
+  if (!open)
+    postSliderMenu.closeMenu()
+  if (isMobile.value)
     enableAnimation.value = true
-  }
 })
 
 // 监听设备类型变化，重置动画状态
 watch(isMobile, () => {
   enableAnimation.value = false
+  postSliderMenu.closeMenu()
 })
 
 /* ============ 新增内容 ============ */
@@ -38,17 +54,14 @@ const parentId = ref<string | null>(null)
 const isOpenAddDialog = ref(false)
 const addPostInputVal = ref(``)
 watch(isOpenAddDialog, (o) => {
-  if (o) {
+  if (o)
     addPostInputVal.value = ``
-    parentId.value = null
-  }
 })
 
 function openAddPostDialog(id: string) {
+  postSliderMenu.closeMenu()
+  parentId.value = id
   isOpenAddDialog.value = true
-  nextTick(() => {
-    parentId.value = id
-  })
 }
 
 function addPost() {
@@ -59,12 +72,19 @@ function addPost() {
   toast.success(`内容新增成功`)
 }
 
+function openCreatePostDialog() {
+  postSliderMenu.closeMenu()
+  parentId.value = null
+  isOpenAddDialog.value = true
+}
+
 /* ============ 重命名 / 删除 / 历史 对象 ============ */
 const editId = ref<string | null>(null)
 const isOpenEditDialog = ref(false)
 const renamePostInputVal = ref(``)
 
 function startRenamePost(id: string) {
+  postSliderMenu.closeMenu()
   editId.value = id
   renamePostInputVal.value = postStore.getPostById(id)!.title
   isOpenEditDialog.value = true
@@ -101,6 +121,7 @@ const hasSubPosts = computed(() => {
 })
 
 function startDelPost(id: string) {
+  postSliderMenu.closeMenu()
   delId.value = id
   delRecursive.value = false
   isOpenDelPostConfirmDialog.value = true
@@ -119,6 +140,7 @@ const historyViewMode = ref<'content' | 'diff'>(`content`)
 const compareTargetIndex = ref(`1`)
 
 function openHistoryDialog(id: string) {
+  postSliderMenu.closeMenu()
   currentPostId.value = id
   currentHistoryIndex.value = 0
   historyViewMode.value = `content`
@@ -174,6 +196,7 @@ const isRegex = ref(false)
 const isCaseSensitive = ref(false)
 
 function toggleSearch() {
+  postSliderMenu.closeMenu()
   isSearching.value = !isSearching.value
   if (isSearching.value) {
     nextTick(() => searchInputRef.value?.focus())
@@ -300,6 +323,13 @@ function replaceInText(text: string, search: string, replace: string): string {
   return text.replace(regex, replace)
 }
 
+function autoResizeReplace(e: Event) {
+  const el = e.target as HTMLTextAreaElement
+  el.style.height = `auto`
+  const h = Math.min(150, el.scrollHeight)
+  el.style.height = h <= 32 ? `32px` : `${h}px`
+}
+
 function replaceFirst() {
   const q = searchQuery.value.trim()
   if (!q)
@@ -367,7 +397,6 @@ function replaceAll() {
 }
 
 /* ============ 排序 ============ */
-const sortMode = store.reactive(addPrefix(`sort_mode`), `create-old-new`)
 const sortedPosts = computed(() => {
   return [...posts.value].sort((a, b) => {
     switch (sortMode.value) {
@@ -408,6 +437,7 @@ const selectProps = computed(() => ({
 }))
 
 function toggleSelectMode() {
+  postSliderMenu.closeMenu()
   isSelectMode.value = !isSelectMode.value
   selectedPostIds.value = []
 }
@@ -443,6 +473,26 @@ async function exportSelected() {
   }
   isSelectMode.value = false
   selectedPostIds.value = []
+}
+
+/* ============ 批量导入 / 导出全部 ============ */
+function openImportDialog() {
+  postSliderMenu.closeMenu()
+  toggleShowImportMdDialog(true)
+}
+
+async function exportAll() {
+  if (!posts.value.length)
+    return
+  postSliderMenu.closeMenu()
+  const toExport = posts.value.map(p => ({ title: p.title, content: p.content }))
+  if (toExport.length === 1) {
+    downloadMD(toExport[0].content, toExport[0].title)
+  }
+  else {
+    await exportPostsAsZip(toExport)
+  }
+  toast.success(`已导出 ${toExport.length} 篇内容`)
 }
 
 function openBatchDelConfirm() {
@@ -586,99 +636,140 @@ function handleDragEnd() {
   >
     <nav
       class="h-full flex flex-col overflow-hidden"
+      :aria-label="isMobile ? '内容管理' : undefined"
       @dragover="handleDragOver"
       @drop.prevent="handleDrop(null)"
     >
       <!-- 标题栏 -->
-      <div class="flex items-center h-10 px-3 shrink-0">
-        <span class="inline-flex items-center text-muted-foreground select-none">
+      <div
+        class="flex items-center shrink-0 bg-background flex-nowrap"
+        :class="isMobile
+          ? 'min-h-[calc(2.75rem+env(safe-area-inset-top,0px))] gap-0.5 border-b border-border px-3 pt-[max(0.625rem,env(safe-area-inset-top,0px))] pb-2.5'
+          : 'h-10 px-3'"
+      >
+        <span class="inline-flex shrink-0 items-center gap-1.5 text-muted-foreground select-none">
           <FileText class="size-4" />
+          <span
+            v-if="posts.length"
+            class="inline-flex items-center justify-center rounded-full bg-muted px-1.5 text-[10px] font-medium tabular-nums text-muted-foreground min-w-[18px] h-[18px]"
+          >
+            {{ posts.length }}
+          </span>
         </span>
-        <span
-          v-if="posts.length"
-          class="ml-1.5 inline-flex items-center justify-center rounded-full bg-muted px-1.5 text-[10px] font-medium tabular-nums text-muted-foreground min-w-[18px] h-[18px]"
-        >
-          {{ posts.length }}
-        </span>
-        <span class="flex-1" />
+        <span class="flex-1 min-w-0" />
 
-        <!-- 搜索 -->
-        <button
-          class="inline-flex items-center justify-center size-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors duration-150"
-          :class="{ 'text-primary bg-primary/10': isSearching }"
-          @click="toggleSearch"
-        >
-          <Search class="size-4" />
-        </button>
+        <div class="flex shrink-0 items-center gap-0.5">
+          <!-- 搜索 -->
+          <button
+            class="inline-flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors duration-150"
+            :class="[
+              isMobile ? 'size-8' : 'size-7',
+              { 'text-primary bg-primary/10': isSearching },
+            ]"
+            @click="toggleSearch"
+          >
+            <Search class="size-4" />
+          </button>
 
-        <!-- 多选 -->
-        <button
-          class="inline-flex items-center justify-center size-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors duration-150"
-          :class="{ 'text-primary bg-primary/10': isSelectMode }"
-          :title="isSelectMode ? '退出选择' : '多选操作'"
-          @click="toggleSelectMode"
-        >
-          <CheckSquare class="size-4" />
-        </button>
+          <!-- 多选 -->
+          <button
+            class="inline-flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors duration-150"
+            :class="[
+              isMobile ? 'size-8' : 'size-7',
+              { 'text-primary bg-primary/10': isSelectMode },
+            ]"
+            :title="isSelectMode ? '退出选择' : '多选操作'"
+            @click="toggleSelectMode"
+          >
+            <CheckSquare class="size-4" />
+          </button>
 
-        <!-- 新增 -->
-        <button
-          class="inline-flex items-center justify-center size-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors duration-150"
-          @click="isOpenAddDialog = true"
-        >
-          <Plus class="size-4" />
-        </button>
+          <!-- 批量导入（移动端快捷入口，桌面端在更多菜单中） -->
+          <button
+            v-if="isMobile"
+            class="inline-flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors duration-150 size-8"
+            title="导入 Markdown（支持批量）"
+            @click="openImportDialog"
+          >
+            <Upload class="size-4" />
+          </button>
 
-        <!-- 更多操作 -->
-        <DropdownMenu>
-          <DropdownMenuTrigger as-child>
-            <button class="inline-flex items-center justify-center size-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors duration-150">
-              <Ellipsis class="size-4" />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" class="w-48">
-            <DropdownMenuLabel class="text-xs text-muted-foreground font-normal">
-              排序方式
-            </DropdownMenuLabel>
-            <DropdownMenuRadioGroup v-model="sortMode">
-              <DropdownMenuRadioItem value="A-Z">
-                文件名（A-Z）
-              </DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="Z-A">
-                文件名（Z-A）
-              </DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="update-new-old">
-                编辑时间（新→旧）
-              </DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="update-old-new">
-                编辑时间（旧→新）
-              </DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="create-new-old">
-                创建时间（新→旧）
-              </DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="create-old-new">
-                创建时间（旧→新）
-              </DropdownMenuRadioItem>
-            </DropdownMenuRadioGroup>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem @click="postStore.collapseAllPosts">
-              <ChevronsDownUp class="mr-2 size-4" />
-              全部收起
-            </DropdownMenuItem>
-            <DropdownMenuItem @click="postStore.expandAllPosts">
-              <ChevronsUpDown class="mr-2 size-4" />
-              全部展开
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+          <!-- 新增 -->
+          <button
+            class="inline-flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors duration-150"
+            :class="isMobile ? 'size-8' : 'size-7'"
+            @click="openCreatePostDialog"
+          >
+            <Plus class="size-4" />
+          </button>
 
-        <!-- 关闭 -->
-        <button
-          class="inline-flex items-center justify-center size-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors duration-150 ml-0.5"
-          @click="isOpenPostSlider = false"
-        >
-          <X class="size-4" />
-        </button>
+          <!-- 更多操作 -->
+          <DropdownMenu :open="headerMenuOpen" @update:open="onHeaderMenuOpenChange">
+            <DropdownMenuTrigger as-child>
+              <button
+                class="inline-flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors duration-150"
+                :class="isMobile ? 'size-8' : 'size-7'"
+              >
+                <Ellipsis class="size-4" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="end"
+              v-bind="headerDropdownProps"
+            >
+              <DropdownMenuLabel class="text-xs text-muted-foreground font-normal">
+                排序方式
+              </DropdownMenuLabel>
+              <DropdownMenuRadioGroup v-model="sortMode">
+                <DropdownMenuRadioItem value="A-Z">
+                  文件名（A-Z）
+                </DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="Z-A">
+                  文件名（Z-A）
+                </DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="update-new-old">
+                  编辑时间（新→旧）
+                </DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="update-old-new">
+                  编辑时间（旧→新）
+                </DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="create-new-old">
+                  创建时间（新→旧）
+                </DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="create-old-new">
+                  创建时间（旧→新）
+                </DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem @click="openImportDialog">
+                <Upload class="mr-2 size-4" />
+                批量导入
+              </DropdownMenuItem>
+              <DropdownMenuItem :disabled="!posts.length" @click="exportAll">
+                <Download class="mr-2 size-4" />
+                导出全部
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem @click="postStore.collapseAllPosts">
+                <ChevronsDownUp class="mr-2 size-4" />
+                全部收起
+              </DropdownMenuItem>
+              <DropdownMenuItem @click="postStore.expandAllPosts">
+                <ChevronsUpDown class="mr-2 size-4" />
+                全部展开
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <!-- 关闭（移动端全屏抽屉） -->
+          <button
+            v-if="isMobile"
+            class="inline-flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors duration-150 ml-0.5 size-8"
+            @click="isOpenPostSlider = false"
+          >
+            <X class="size-4" />
+          </button>
+        </div>
       </div>
 
       <!-- 搜索栏 -->
@@ -720,12 +811,14 @@ function handleDragEnd() {
 
         <!-- 替换栏 -->
         <div class="relative">
-          <input
+          <textarea
             v-model="replaceQuery"
-            class="w-full h-8 rounded-md border border-border bg-background px-2.5 pr-16 text-xs placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-ring transition-colors"
+            class="w-full rounded-md border border-border bg-background px-2.5 pr-16 text-xs placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-ring transition-colors resize-none leading-none py-[10px] overflow-hidden max-h-[150px]"
+            style="height: 32px; min-height: 32px"
             placeholder="替换为…"
-          >
-          <div class="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-0.5">
+            @input="autoResizeReplace($event)"
+          />
+          <div class="absolute right-1.5 top-1.5 flex items-center gap-0.5">
             <button
               class="inline-flex items-center justify-center size-5 rounded text-muted-foreground/50 hover:text-foreground transition-colors disabled:opacity-35"
               title="替换一处"
@@ -835,7 +928,10 @@ function handleDragEnd() {
       <Transition name="slide-up">
         <div
           v-if="isSelectMode"
-          class="shrink-0 border-t border-border bg-background px-3 pt-2 pb-3 space-y-2"
+          class="shrink-0 border-t border-border bg-background px-3 pt-2 space-y-2"
+          :class="isMobile
+            ? 'pb-[max(0.75rem,env(safe-area-inset-bottom,0px))]'
+            : 'pb-3'"
         >
           <!-- 选中信息行 -->
           <div class="flex items-center justify-between text-xs">

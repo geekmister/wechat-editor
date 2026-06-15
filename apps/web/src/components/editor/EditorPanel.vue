@@ -1,13 +1,12 @@
 <script setup lang="ts">
-import type { ComponentPublicInstance } from 'vue'
-
 import { Compartment, EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { markdownSetup, theme } from '@md/shared/editor'
 import imageCompression from 'browser-image-compression'
-import { SidebarAIToolbar } from '@/components/ai'
+import { defineAsyncComponent } from 'vue'
 import SlashCommandMenu from '@/components/editor/SlashCommandMenu.vue'
 import { SearchTab } from '@/components/ui/search-tab'
+import { useEditorRefresh } from '@/composables/useEditorRefresh'
 import { useImageUploader } from '@/composables/useImageUploader'
 import { useSlashCommand } from '@/composables/useSlashCommand'
 import { useEditorStore } from '@/stores/editor'
@@ -15,9 +14,12 @@ import { usePostStore } from '@/stores/post'
 import { useRenderStore } from '@/stores/render'
 import { useThemeStore } from '@/stores/theme'
 import { useUIStore } from '@/stores/ui'
-import { checkImage, toBase64 } from '@/utils'
-import { fileUpload } from '@/utils/file'
+import { fileUpload } from '@/utils/file-upload'
+import { contentHasMath, loadMathJax, MATHJAX_READY_EVENT } from '@/utils/mathjax'
+import { checkImage, toBase64 } from '@/utils/shared-helpers'
 import { store } from '@/utils/storage'
+
+const SidebarAIToolbar = defineAsyncComponent(() => import('@/components/ai/SidebarAIToolbar.vue'))
 
 const editorStore = useEditorStore()
 const postStore = usePostStore()
@@ -25,8 +27,29 @@ const renderStore = useRenderStore()
 const themeStore = useThemeStore()
 const uiStore = useUIStore()
 const { upload } = useImageUploader()
+const { editorRefresh } = useEditorRefresh()
 
-const slashCommand = useSlashCommand()
+const {
+  visible: slashVisible,
+  position: slashPosition,
+  filter: slashFilter,
+  activeIndex: slashActiveIndex,
+  basicCommands: slashBasicCommands,
+  commonCommands: slashCommonCommands,
+  editCommands: slashEditCommands,
+  styleCommands: slashStyleCommands,
+  filteredCommands: slashFilteredCommands,
+  closeMenu: closeSlashMenu,
+  executeCommand: executeSlashCommand,
+  createExtension: createSlashExtension,
+} = useSlashCommand()
+
+function onWrapperContextMenuCapture(e: MouseEvent) {
+  if (!slashVisible.value)
+    return
+  e.preventDefault()
+  e.stopPropagation()
+}
 
 const { editor } = storeToRefs(editorStore)
 const { isDark } = storeToRefs(uiStore)
@@ -46,17 +69,11 @@ const themeCompartment = new Compartment()
 const changeTimer = ref<ReturnType<typeof setTimeout>>()
 
 const editorRef = useTemplateRef<HTMLDivElement>(`editorRef`)
-const codeMirrorWrapper = useTemplateRef<ComponentPublicInstance<HTMLDivElement>>(`codeMirrorWrapper`)
+const codeMirrorWrapper = useTemplateRef<HTMLDivElement>(`codeMirrorWrapper`)
 
-const progressValue = ref(0)
 const isImgLoading = ref(false)
 
-// Editor refresh function
-function editorRefresh() {
-  themeStore.updateCodeTheme()
-  const raw = editorStore.getContent()
-  renderStore.render(raw)
-}
+// Editor refresh is provided by useEditorRefresh()
 
 // --- Search tab integration ---
 const searchTabRef = useTemplateRef<InstanceType<typeof SearchTab>>(`searchTabRef`)
@@ -202,6 +219,8 @@ async function uploadImage(
   }
   catch (err) {
     toast.error((err as any).message)
+    if (cb)
+      cb(``, ``)
   }
   finally {
     isImgLoading.value = false
@@ -335,25 +354,11 @@ function createPasteHandler() {
         if (validItems.length === 0) {
           return
         }
-        const intervalId = setInterval(() => {
-          const newProgress = progressValue.value + 1
-          if (newProgress >= 100) {
-            return
-          }
-          progressValue.value = newProgress
-        }, 100)
-
         const processFiles = async () => {
-          for (const item of validItems) {
+          for (const item of validItems)
             await uploadImage(item)
-          }
-          clearInterval(intervalId)
-          progressValue.value = 100
-          setTimeout(() => {
-            progressValue.value = 0
-          }, 1000)
         }
-        processFiles()
+        void processFiles()
       })
       return true
     }
@@ -459,7 +464,7 @@ function createFormTextArea(dom: HTMLDivElement) {
       EditorView.domEventHandlers({
         paste: createPasteHandler(),
       }),
-      ...slashCommand.createExtension(() => codeMirrorView.value),
+      ...createSlashExtension(() => codeMirrorView.value),
     ],
   })
 
@@ -473,11 +478,31 @@ function createFormTextArea(dom: HTMLDivElement) {
 }
 
 // --- Lifecycle ---
+function handleMathJaxReady() {
+  editorRefresh()
+}
+
+async function preloadMathJaxIfNeeded(content: string) {
+  if (!contentHasMath(content))
+    return
+
+  try {
+    await loadMathJax()
+  }
+  catch (error) {
+    console.error(error)
+  }
+}
+
+let postSwitchGeneration = 0
+
 onMounted(() => {
   const editorDom = editorRef.value
   if (editorDom == null) {
     return
   }
+
+  window.addEventListener(MATHJAX_READY_EVENT, handleMathJaxReady)
 
   renderStore.initRendererInstance({
     isMacCodeBlock: themeStore.isMacCodeBlock,
@@ -486,9 +511,12 @@ onMounted(() => {
 
   themeStore.applyCurrentTheme()
 
-  nextTick(() => {
+  void nextTick(async () => {
     const editorView = createFormTextArea(editorDom)
     editor.value = editorView
+
+    const content = posts.value[currentPostIndex.value]?.content ?? ``
+    await preloadMathJaxIfNeeded(content)
 
     editorRefresh()
     mdLocalToRemote()
@@ -516,6 +544,7 @@ watch(currentPostIndex, () => {
 
   const currentContent = codeMirrorView.value.state.doc.toString()
   if (currentContent !== currentPost.content) {
+    const generation = ++postSwitchGeneration
     codeMirrorView.value.dispatch({
       changes: {
         from: 0,
@@ -523,7 +552,11 @@ watch(currentPostIndex, () => {
         insert: currentPost.content,
       },
     })
-    editorRefresh()
+    void preloadMathJaxIfNeeded(currentPost.content).then(() => {
+      if (generation !== postSwitchGeneration)
+        return
+      editorRefresh()
+    })
   }
 })
 
@@ -549,16 +582,17 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  window.removeEventListener(MATHJAX_READY_EVENT, handleMathJaxReady)
   clearTimeout(historyTimer.value)
   clearTimeout(changeTimer.value)
-  document.removeEventListener(`keydown`, handleGlobalKeydown)
+  document.removeEventListener(`keydown`, handleGlobalKeydown, { capture: false })
 })
 
 defineExpose({
   codeMirrorView,
   editorRefresh,
   uploadImage,
-  progressValue,
+  isImgLoading,
 })
 </script>
 
@@ -567,17 +601,22 @@ defineExpose({
     v-show="viewMode !== 'preview'"
     ref="codeMirrorWrapper"
     class="codeMirror-wrapper relative h-full"
+    @contextmenu.capture="onWrapperContextMenuCapture"
   >
     <SearchTab v-if="codeMirrorView" ref="searchTabRef" :editor-view="codeMirrorView as any" />
     <SlashCommandMenu
-      :visible="slashCommand.visible.value"
-      :position="slashCommand.position.value"
-      :active-index="slashCommand.activeIndex.value"
-      :basic-commands="slashCommand.basicCommands.value"
-      :common-commands="slashCommand.commonCommands.value"
-      :filtered-commands="slashCommand.filteredCommands.value"
-      @execute="(cmd) => codeMirrorView && slashCommand.executeCommand(codeMirrorView, cmd)"
-      @close="slashCommand.closeMenu()"
+      :visible="slashVisible"
+      :position="slashPosition"
+      :active-index="slashActiveIndex"
+      :filter="slashFilter"
+      :container-el="codeMirrorWrapper"
+      :basic-commands="slashBasicCommands"
+      :common-commands="slashCommonCommands"
+      :edit-commands="slashEditCommands"
+      :style-commands="slashStyleCommands"
+      :filtered-commands="slashFilteredCommands"
+      @execute="(cmd) => codeMirrorView && executeSlashCommand(codeMirrorView, cmd)"
+      @close="closeSlashMenu()"
     />
     <SidebarAIToolbar
       :is-mobile="isMobile"

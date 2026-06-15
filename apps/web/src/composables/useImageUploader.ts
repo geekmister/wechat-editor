@@ -1,30 +1,24 @@
 import SparkMD5 from 'spark-md5'
 import { ref } from 'vue'
-import { toBase64 } from '@/utils'
-import { fileUpload } from '@/utils/file'
+import { fileUpload } from '@/utils/file-upload'
+import { toBase64 } from '@/utils/shared-helpers'
+import { store } from '@/utils/storage'
 
-const STORAGE_KEY = 'uploaded_image_map'
+const STORAGE_KEY = `uploaded_image_map`
 
 export function useImageUploader() {
   const isUploading = ref(false)
   const error = ref<string | null>(null)
 
   // 获取本地缓存
-  const getStorageMap = (): Record<string, string> => {
-    try {
-      const str = localStorage.getItem(STORAGE_KEY)
-      return str ? JSON.parse(str) : {}
-    }
-    catch {
-      return {}
-    }
+  const getStorageMap = async (): Promise<Record<string, string>> => {
+    return (await store.getJSON<Record<string, string>>(STORAGE_KEY, {})) ?? {}
   }
 
-  // 更新本地缓存
-  const updateStorageMap = (hash: string, url: string) => {
-    const map = getStorageMap()
+  const updateStorageMap = async (hash: string, url: string) => {
+    const map = await getStorageMap()
     map[hash] = url
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(map))
+    await store.setJSON(STORAGE_KEY, map)
   }
 
   // 计算 Blob/File 的 MD5
@@ -98,18 +92,16 @@ export function useImageUploader() {
 
       const hash = await calculateHash(file)
 
-      const cache = getStorageMap()
-      if (cache[hash]) {
+      const cache = await getStorageMap()
+      if (cache[hash])
         return cache[hash]
-      }
 
       const base64Content = await toBase64(file)
 
       const url = await fileUpload(base64Content, file)
 
-      if (url) {
-        updateStorageMap(hash, url)
-      }
+      if (url)
+        await updateStorageMap(hash, url)
 
       return url
     }
