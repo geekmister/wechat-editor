@@ -63,5 +63,5 @@ dev-dist
 apps/utools/dist
 apps/utools/release
 
-# local deploy script (contains server credentials)
+#custom
 scripts/deploy.sh
