@@ -1,10 +1,11 @@
 import type { IOpts, RendererAPI } from '@md/shared/types'
+import type { FrontMatterData } from '@md/shared/types/front-matter'
 import type { ReadTimeResults } from '@md/shared/utils/readingTime'
 import type { RendererObject, Tokens } from 'marked'
 import readingTime from '@md/shared/utils/readingTime'
 import frontMatter from 'front-matter'
 import hljs from 'highlight.js/lib/core'
-import { marked } from 'marked'
+import { Marked } from 'marked'
 import {
   getBuiltInRegistry,
   markedAlert,
@@ -28,18 +29,13 @@ Object.entries(COMMON_LANGUAGES).forEach(([name, lang]) => {
 
 export { hljs }
 
-marked.setOptions({
-  breaks: true,
-})
-
 const DOUBLE_QUOTE_REGEX = /"/g
 const UNDERSCORE_REGEX = /_/g
 const HEADING_TAG_REGEX = /^h\d$/
 const PARAGRAPH_WRAPPER_REGEX = /^<p(?:\s[^>]*)?>([\s\S]*?)<\/p>/
 const MP_WEIXIN_LINK_REGEX = /^https?:\/\/mp\.weixin\.qq\.com/
 
-function buildAddition(): string {
-  return `
+const ADDITION_STYLE = `
     <style>
       .preview-wrapper pre::before {
         position: absolute;
@@ -55,7 +51,6 @@ function buildAddition(): string {
       }
     </style>
   `
-}
 
 function buildFootnoteArray(footnotes: [number, string, string][]): string {
   return footnotes
@@ -158,7 +153,7 @@ function renderDiffCode(text: string, baseLang: string): string {
 }
 
 interface ParseResult {
-  yamlData: Record<string, any>
+  yamlData: FrontMatterData
   markdownContent: string
   readingTime: ReadTimeResults
 }
@@ -166,13 +161,13 @@ interface ParseResult {
 function parseFrontMatterAndContent(markdownText: string): ParseResult {
   try {
     const parsed = frontMatter(markdownText)
-    const yamlData = parsed.attributes
+    const yamlData = parsed.attributes as FrontMatterData
     const markdownContent = parsed.body
 
     const readingTimeResult = readingTime(markdownContent)
 
     return {
-      yamlData: yamlData as Record<string, any>,
+      yamlData,
       markdownContent,
       readingTime: readingTimeResult,
     }
@@ -192,6 +187,11 @@ export function initRenderer(opts: IOpts = {}): RendererAPI {
   let footnoteIndex: number = 0
   const listOrderedStack: boolean[] = []
   const listCounters: number[] = []
+  const markdownParser = new Marked()
+
+  markdownParser.setOptions({
+    breaks: true,
+  })
 
   function getOpts(): IOpts {
     return opts
@@ -227,12 +227,13 @@ export function initRenderer(opts: IOpts = {}): RendererAPI {
   function reset(newOpts: Partial<IOpts>): void {
     footnotes.length = 0
     footnoteIndex = 0
+    listOrderedStack.length = 0
+    listCounters.length = 0
     setOptions(newOpts)
   }
 
   function setOptions(newOpts: Partial<IOpts>): void {
     opts = { ...opts, ...newOpts }
-    marked.use(markedInfographic({ themeMode: newOpts.themeMode }))
   }
 
   function buildReadingTime(readingTime: ReadTimeResults): string {
@@ -444,32 +445,35 @@ export function initRenderer(opts: IOpts = {}): RendererAPI {
     },
   }
 
-  marked.use({ renderer })
+  markdownParser.use({ renderer })
   // 新主题系统：扩展不再需要 styles 参数
   // 通过闭包传入注册表 getter，避免直接依赖全局状态
-  marked.use(markedComponent(() => opts.components ?? getBuiltInRegistry()))
-  marked.use(markedMarkup())
-  marked.use(markedToc())
-  marked.use(markedSlider())
-  marked.use(markedAlert({}))
-  marked.use(MDKatex({ nonStandard: true }, true))
-  marked.use(markedFootnotes())
-  marked.use(markedMermaid())
-  marked.use(markedPlantUML({
+  markdownParser.use(markedComponent(() => opts.components ?? getBuiltInRegistry()))
+  markdownParser.use(markedMarkup())
+  markdownParser.use(markedToc())
+  markdownParser.use(markedSlider())
+  markdownParser.use(markedAlert({}))
+  markdownParser.use(MDKatex({ nonStandard: true }, true))
+  markdownParser.use(markedFootnotes())
+  markdownParser.use(markedMermaid())
+  markdownParser.use(markedPlantUML({
     inlineSvg: true, // 启用SVG内嵌，适用于微信公众号
   }))
-  marked.use(markedInfographic({ themeMode: opts.themeMode }))
-  marked.use(markedRuby())
+  markdownParser.use(markedInfographic(() => ({ themeMode: opts.themeMode })))
+  markdownParser.use(markedRuby())
 
   return {
-    buildAddition,
+    buildAddition: () => ADDITION_STYLE,
     buildFootnotes,
     setOptions,
     reset,
     parseFrontMatterAndContent,
+    renderMarkdownToHtml(markdown: string) {
+      return markdownParser.parse(markdown) as string
+    },
     buildReadingTime,
     createContainer(content: string) {
-      return styledContent(`container mx-auto`, content, `section`)
+      return styledContent(`container`, content, `section`)
     },
     getOpts,
   }

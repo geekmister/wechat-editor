@@ -1,15 +1,12 @@
 import type { S3ClientConfig } from '@aws-sdk/client-s3'
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
-import { giteeConfig, githubConfig } from '@md/shared/configs'
-
 import fetch from '@md/shared/utils/fetch'
 import * as tokenTools from '@md/shared/utils/tokenTools'
 import { base64encode, safe64, utf16to8 } from '@md/shared/utils/tokenTools'
 import Buffer from 'buffer-from'
 import CryptoJS from 'crypto-js'
-import * as qiniu from 'qiniu-js'
 import { v4 as uuidv4 } from 'uuid'
+import { uploadDefaultImage } from '@/services/upload/client'
+import { loadS3Sdk } from './s3-sdk'
 import { store } from './storage'
 
 /**
@@ -27,27 +24,9 @@ function safeJsonParse<T>(str: string | null | undefined, context: string = `con
   }
 }
 
-async function getConfig(useDefault: boolean, platform: string) {
-  if (useDefault) {
-    // load default config file
-    const config = platform === `github` ? githubConfig : giteeConfig
-    const { username, repoList, branch, accessTokenList } = config
-
-    // choose random token from access_token list
-    const tokenIndex = Math.floor(Math.random() * accessTokenList.length)
-    const accessToken = accessTokenList[tokenIndex].replace(`doocsmd`, ``)
-
-    // choose random repo from repo list
-    const repoIndex = Math.floor(Math.random() * repoList.length)
-    const repo = repoList[repoIndex]
-
-    return { username, repo, branch, accessToken }
-  }
-
-  // load configuration from storage
+async function getConfig(platform: string) {
   const customConfig = await store.getJSON<any>(`${platform}Config`, {}) || {}
 
-  // split username/repo
   const repoUrl = customConfig.repo
     .replace(`https://${platform}.com/`, ``)
     .replace(`http://${platform}.com/`, ``)
@@ -86,16 +65,16 @@ function getDateFilename(filename: string) {
   return `${currentTimestamp}-${uuidv4()}.${fileSuffix}`
 }
 
+async function defaultImageUpload(_content: string, file: File): Promise<string> {
+  return await uploadDefaultImage(file)
+}
+
 // -----------------------------------------------------------------------
 // GitHub File Upload
 // -----------------------------------------------------------------------
 
 async function ghFileUpload(content: string, filename: string) {
-  const useDefault = await store.get(`imgHost`) === `default`
-  const { username, repo, branch, accessToken, useCDN } = await getConfig(
-    useDefault,
-    `github`,
-  )
+  const { username, repo, branch, accessToken, useCDN } = await getConfig(`github`)
   const dir = getDir()
   const url = `https://api.github.com/repos/${username}/${repo}/contents/${dir}/`
   const dateFilename = getDateFilename(filename)
@@ -125,45 +104,10 @@ async function ghFileUpload(content: string, filename: string) {
   const githubResourceUrl = `raw.githubusercontent.com/${username}/${repo}/${branch}/`
   const cdnResourceUrl = `fastly.jsdelivr.net/gh/${username}/${repo}@${branch}/`
   res.content = res.data?.content || res.content
-  const shouldUseCDN = useDefault || useCDN
+  const shouldUseCDN = useCDN
   return shouldUseCDN
     ? res.content.download_url.replace(githubResourceUrl, cdnResourceUrl)
     : res.content.download_url
-}
-
-// -----------------------------------------------------------------------
-// Gitee File Upload
-// -----------------------------------------------------------------------
-
-async function giteeUpload(content: string, filename: string) {
-  const useDefault = await store.get(`imgHost`) === `default`
-  const { username, repo, branch, accessToken } = await getConfig(useDefault, `gitee`)
-  const dir = getDir()
-  const dateFilename = getDateFilename(filename)
-  const url = `https://gitee.com/api/v5/repos/${username}/${repo}/contents/${dir}/${dateFilename}`
-  const res = await fetch<{ content: {
-    download_url: string
-  } }, {
-    content: {
-      download_url: string
-    }
-    data: {
-      content: {
-        download_url: string
-      }
-    }
-  }>({
-    url,
-    method: `POST`,
-    data: {
-      content,
-      branch,
-      access_token: accessToken,
-      message: `Upload by ${window.location.href}`,
-    },
-  })
-  res.content = res.data?.content || res.content
-  return encodeURI(res.content.download_url)
 }
 
 // -----------------------------------------------------------------------
@@ -181,7 +125,12 @@ function getQiniuToken(accessKey: string, secretKey: string, putPolicy: {
   return `${accessKey}:${safe64(encodedSigned)}:${encoded}`
 }
 
+async function loadQiniu() {
+  return import(`qiniu-js`)
+}
+
 async function qiniuUpload(file: File) {
+  const qiniu = await loadQiniu()
   const configStr = await store.get(`qiniuConfig`)
   const { accessKey, secretKey, bucket, region, path, domain } = safeJsonParse<{ accessKey: string, secretKey: string, bucket: string, region?: string, path: string, domain: string }>(configStr, `qiniu config`)
   const token = getQiniuToken(accessKey, secretKey, {
@@ -229,6 +178,8 @@ async function aliOSSFileUpload(file: File) {
     endpoint,
     forcePathStyle: false,
   }
+
+  const { S3Client, PutObjectCommand, getSignedUrl } = await loadS3Sdk()
 
   const s3Client = new S3Client(clientConfig)
 
@@ -291,6 +242,8 @@ async function txCOSFileUpload(file: File) {
     forcePathStyle: false,
   }
 
+  const { S3Client, PutObjectCommand, getSignedUrl } = await loadS3Sdk()
+
   const s3Client = new S3Client(clientConfig)
 
   const dir = path ? `${path}/` : ``
@@ -341,6 +294,7 @@ async function minioFileUpload(file: File) {
   const dateFilename = getDateFilename(file.name)
   const configStr = await store.get(`minioConfig`)
   const { endpoint, port, useSSL, bucket, accessKey, secretKey } = safeJsonParse<{ endpoint: string, port: string, useSSL: boolean, bucket: string, accessKey: string, secretKey: string }>(configStr, `minio config`)
+  const { S3Client, PutObjectCommand, getSignedUrl } = await loadS3Sdk()
   const s3Client = new S3Client({
     endpoint: `${useSSL ? `https` : `http`}://${endpoint}${port ? `:${port}` : ``}`,
     credentials: {
@@ -357,13 +311,16 @@ async function minioFileUpload(file: File) {
     ContentType: file.type,
   })
   const presignedUrl = await getSignedUrl(s3Client, command, { expiresIn: 300 })
-  await fetch(presignedUrl, {
+  const minioResponse = await window.fetch(presignedUrl, {
     method: `PUT`,
     headers: {
       'Content-Type': file.type,
     },
-    data: file,
+    body: file,
   })
+  if (!minioResponse.ok) {
+    throw new Error(`MinIO upload failed: ${minioResponse.status} ${minioResponse.statusText}`)
+  }
   return `${useSSL ? `https` : `http`}://${endpoint}${port ? `:${port}` : ``}/${bucket}/${dateFilename}`
 }
 
@@ -400,6 +357,8 @@ async function s3Upload(file: File) {
     forcePathStyle: pathStyle,
     endpoint: resolvedEndpoint,
   }
+
+  const { S3Client, PutObjectCommand, getSignedUrl } = await loadS3Sdk()
 
   const s3Client = new S3Client(clientConfig)
 
@@ -545,19 +504,23 @@ async function r2Upload(file: File) {
   const { accountId, accessKey, secretKey, bucket, path, domain } = safeJsonParse<{ accountId: string, accessKey: string, secretKey: string, bucket: string, path: string, domain: string }>(configStr, `r2 config`)
   const dir = path ? `${path}/` : ``
   const filename = dir + getDateFilename(file.name)
+  const { S3Client, PutObjectCommand, getSignedUrl } = await loadS3Sdk()
   const client = new S3Client({ region: `auto`, endpoint: `https://${accountId}.r2.cloudflarestorage.com`, credentials: { accessKeyId: accessKey, secretAccessKey: secretKey } })
   const signedUrl = await getSignedUrl(
     client,
     new PutObjectCommand({ Bucket: bucket, Key: filename, ContentType: file.type }),
     { expiresIn: 300 },
   )
-  await fetch(signedUrl, {
+  const r2Response = await window.fetch(signedUrl, {
     method: `PUT`,
     headers: {
       'Content-Type': file.type,
     },
-    data: file,
+    body: file,
   })
+  if (!r2Response.ok) {
+    throw new Error(`R2 upload failed: ${r2Response.status} ${r2Response.statusText}`)
+  }
   return `${domain}/${filename}`
 }
 
@@ -726,6 +689,10 @@ async function cloudinaryUpload(file: File): Promise<string> {
 
 async function formCustomUpload(content: string, file: File) {
   const customConfig = await store.get(`formCustomConfig`)
+  const [{ S3Client, PutObjectCommand, getSignedUrl }, qiniu] = await Promise.all([
+    loadS3Sdk(),
+    loadQiniu(),
+  ])
   const str = `
     async (CUSTOM_ARG) => {
       ${customConfig}
@@ -780,8 +747,6 @@ export async function fileUpload(content: string, file: File) {
       return txCOSFileUpload(file)
     case `qiniu`:
       return qiniuUpload(file)
-    case `gitee`:
-      return giteeUpload(content, file.name)
     case `github`:
       return ghFileUpload(content, file.name)
     case `mp`:
@@ -797,9 +762,6 @@ export async function fileUpload(content: string, file: File) {
     case `formCustom`:
       return formCustomUpload(content, file)
     default:
-      // return file.size / 1024 < 1024
-      //     ? giteeUpload(content, file.name)
-      //     : ghFileUpload(content, file.name);
-      return ghFileUpload(content, file.name)
+      return defaultImageUpload(content, file)
   }
 }

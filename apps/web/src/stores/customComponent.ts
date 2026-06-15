@@ -1,7 +1,7 @@
 import type { ComponentRegistry, CreateComponentParams, CustomComponentDef, UpdateComponentParams } from '@md/shared'
 import { BUILT_IN_COMPONENTS, getBuiltInRegistry } from '@md/core'
 import { v4 as uuidv4 } from 'uuid'
-import { addPrefix } from '@/utils'
+import { addPrefix } from '@/utils/prefix'
 import { store } from '@/utils/storage'
 
 /**
@@ -105,11 +105,27 @@ export const useCustomComponentStore = defineStore(`customComponent`, () => {
   }
 
   /**
-   * 生成该组件的 Markdown 使用示例字符串（包含所有 props）
+   * 生成该组件的 Markdown 使用示例字符串
+   * 优先使用 example 字段；否则自动构造，根据 prop.type 生成合适的占位值
    */
   function buildSnippet(def: CustomComponentDef): string {
+    if (def.example)
+      return def.example
     const propsStr = def.props
-      .map(p => `${p.name}="${p.default ?? ``}"`)
+      .map((p) => {
+        let placeholder: string
+        if (p.default !== undefined && p.default !== ``)
+          placeholder = p.default
+        else if (p.type === `array`)
+          placeholder = `[]`
+        else if (p.type === `boolean`)
+          placeholder = `true`
+        else if (p.type === `number`)
+          placeholder = `0`
+        else
+          placeholder = p.name
+        return `${p.name}="${placeholder}"`
+      })
       .join(` `)
     return `<${def.name}${propsStr ? ` ${propsStr}` : ``} />`
   }

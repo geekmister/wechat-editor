@@ -1,7 +1,7 @@
 {
   "name": "@md/mcp-server",
   "type": "module",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "private": true,
   "description": "MCP server for doocs/md – exposes markdown rendering and AI service information to AI agents",
   "bin": {
@@ -15,11 +15,11 @@
     "@md/core": "workspace:*",
     "@md/shared": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "tsx": "^4.22.3",
+    "tsx": "^4.22.4",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/node": "^25.9.1",
+    "@types/node": "^25.9.3",
     "typescript": "~6.0.3"
   }
 }

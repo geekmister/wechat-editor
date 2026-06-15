@@ -1,4 +1,3 @@
-import type { OutputOptions } from 'rollup'
 import type * as vite from 'vite'
 import type * as wxt from 'wxt'
 import { writeFile } from 'node:fs/promises'
@@ -39,7 +38,9 @@ export default defineWxtModule({
     wxt.hook(`vite:build:extendConfig`, (_, config) => {
       if (config.build?.rollupOptions?.input && config.build?.rollupOptions?.output) {
         const input = config.build?.rollupOptions.input as Record<string, string>
-        const wxtOutput = config.build?.rollupOptions.output as OutputOptions
+        const wxtOutput = config.build?.rollupOptions.output as {
+          manualChunks?: (id: string) => string | undefined
+        }
         if (input.options || input.sidepanel) {
           wxtOutput.manualChunks = (id) => {
             if (id.includes(`node_modules`)) {
@@ -208,7 +209,6 @@ export function htmlScriptToLocal(
               await writeFile(outFile, textContent, `utf8`)
               // Replace unsafe inline script
               const virtualScript = document.createElement(`script`)
-              // virtualScript.type = `module`
               virtualScript.src = `/${fileName}`
               script.replaceWith(virtualScript)
             })()

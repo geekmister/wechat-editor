@@ -1,4 +1,4 @@
-import { addPrefix } from '@/utils'
+import { addPrefix } from '@/utils/prefix'
 import { store } from '@/utils/storage'
 
 /**
@@ -60,6 +60,9 @@ export const useUIStore = defineStore(`ui`, () => {
   const enableScrollSync = store.reactive(addPrefix(`enableScrollSync`), true)
   const toggleScrollSync = useToggle(enableScrollSync)
 
+  // 复制到公众号时的格式模式
+  const copyMode = store.reactive(addPrefix(`copyMode`), `txt`)
+
   // ==================== 对话框状态 ====================
   // 是否展示 CSS 编辑器
   const isShowCssEditor = store.reactive(`isShowCssEditor`, false)
@@ -120,11 +123,41 @@ export const useUIStore = defineStore(`ui`, () => {
   const isShowTemplateDialog = ref(false)
   const toggleShowTemplateDialog = useToggle(isShowTemplateDialog)
 
-  // 是否展示自定义组件对话框
+  // 是否展示组件对话框
   const isShowComponentDialog = ref(false)
   const toggleShowComponentDialog = useToggle(isShowComponentDialog)
 
-  // 自定义组件对话框 — 打开时预展开的组件名（如 'MpProfile'）
+  // 是否展示云同步对话框
+  const isShowSyncDialog = ref(false)
+  const toggleShowSyncDialog = useToggle(isShowSyncDialog)
+
+  // 是否展示账户对话框
+  const isShowAccountDialog = ref(false)
+  const toggleShowAccountDialog = useToggle(isShowAccountDialog)
+
+  // 是否展示分享对话框
+  const isShowShareDialog = ref(false)
+  const shareDialogInitialTab = ref<`create` | `manage`>(`create`)
+
+  function openShareDialog(options?: { tab?: `create` | `manage` }) {
+    shareDialogInitialTab.value = options?.tab ?? `create`
+    isShowShareDialog.value = true
+  }
+
+  // 是否展示关于 / 赞赏 / 语法帮助 / 配置导入导出对话框
+  const isShowAboutDialog = ref(false)
+  const toggleShowAboutDialog = useToggle(isShowAboutDialog)
+
+  const isShowFundDialog = ref(false)
+  const toggleShowFundDialog = useToggle(isShowFundDialog)
+
+  const isShowMarkdownHelpDialog = ref(false)
+  const toggleShowMarkdownHelpDialog = useToggle(isShowMarkdownHelpDialog)
+
+  const isShowEditorStateDialog = ref(false)
+  const toggleShowEditorStateDialog = useToggle(isShowEditorStateDialog)
+
+  // 组件对话框 — 打开时预展开的组件名（如 'MpProfile'）
   const componentDialogTarget = ref<string | null>(null)
 
   function openComponentDialogWithTarget(target: string) {
@@ -198,6 +231,7 @@ export const useUIStore = defineStore(`ui`, () => {
     isOpenFolderPanel,
     enableImageReupload,
     enableScrollSync,
+    copyMode,
 
     // ==================== 对话框状态 ====================
     isShowCssEditor,
@@ -222,6 +256,21 @@ export const useUIStore = defineStore(`ui`, () => {
     toggleShowTemplateDialog,
     isShowComponentDialog,
     toggleShowComponentDialog,
+    isShowSyncDialog,
+    toggleShowSyncDialog,
+    isShowAccountDialog,
+    toggleShowAccountDialog,
+    isShowShareDialog,
+    shareDialogInitialTab,
+    openShareDialog,
+    isShowAboutDialog,
+    toggleShowAboutDialog,
+    isShowFundDialog,
+    toggleShowFundDialog,
+    isShowMarkdownHelpDialog,
+    toggleShowMarkdownHelpDialog,
+    isShowEditorStateDialog,
+    toggleShowEditorStateDialog,
     componentDialogTarget,
     openComponentDialogWithTarget,
     aiDialogVisible,

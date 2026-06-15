@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Blocks, Image, Table } from 'lucide-vue-next'
+import { Blocks, Image, Table } from '@lucide/vue'
 import { useEditorStore } from '@/stores/editor'
 import { useUIStore } from '@/stores/ui'
 import { normalizeFormulaInput } from '@/utils/formula'
@@ -46,7 +46,7 @@ function openFormulaEditor() {
       </MenubarItem>
       <MenubarItem @click="toggleShowComponentDialog()">
         <Blocks class="mr-2 h-4 w-4" />
-        自定义组件
+        组件
       </MenubarItem>
     </MenubarSubContent>
   </MenubarSub>
@@ -71,7 +71,7 @@ function openFormulaEditor() {
       </MenubarItem>
       <MenubarItem @click="toggleShowComponentDialog()">
         <Blocks class="mr-2 h-4 w-4" />
-        自定义组件
+        组件
       </MenubarItem>
     </MenubarContent>
   </MenubarMenu>
