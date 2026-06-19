@@ -5,11 +5,11 @@ import { hydrateSyncedSettings } from '@/services/sync/hydrate'
 import { mergeRemoteIntoLocal, postToDoc, toMs } from '@/services/sync/merge'
 import { isProPlan, SYNC_DEBOUNCE_MS_PRO, SYNC_PRO_ENABLED } from '@/services/sync/plan'
 import { applyRemoteSettings, collectChangedSettings } from '@/services/sync/settings'
+import { store } from '@/storage'
+import { addPrefix } from '@/storage/prefix'
+import { safeGetItem, safeRemoveItem, safeSetItem } from '@/storage/safe-access'
 import { useAuthStore } from '@/stores/auth'
 import { usePostStore } from '@/stores/post'
-import { safeGetItem, safeRemoveItem, safeSetItem } from '@/utils/localStorageSafe'
-import { addPrefix } from '@/utils/prefix'
-import { store } from '@/utils/storage'
 
 export type SyncStatus = 'idle' | 'syncing' | 'error'
 
@@ -127,7 +127,7 @@ export const useSyncStore = defineStore(`sync`, () => {
       if (pulled.documents.length) {
         const { posts, changed } = mergeRemoteIntoLocal(postStore.posts, pulled.documents)
         if (changed)
-          postStore.replacePosts(posts)
+          await postStore.replacePostsAndPersist(posts)
       }
 
       if (pulled.settings.length) {
@@ -146,6 +146,7 @@ export const useSyncStore = defineStore(`sync`, () => {
       }
 
       writeSyncedIds(postStore.posts.map(p => p.id))
+      await postStore.persistImmediately()
       lastSyncAt.value = Date.now()
       status.value = `idle`
     }
