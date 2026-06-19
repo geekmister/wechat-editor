@@ -2,22 +2,24 @@
 import { Compartment, EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { markdownSetup, theme } from '@md/shared/editor'
+import { checkImage } from '@md/shared/utils/basicHelpers'
+import { toBase64 } from '@md/shared/utils/fileHelpers'
 import imageCompression from 'browser-image-compression'
 import { defineAsyncComponent } from 'vue'
 import SlashCommandMenu from '@/components/editor/SlashCommandMenu.vue'
 import { SearchTab } from '@/components/ui/search-tab'
 import { useEditorRefresh } from '@/composables/useEditorRefresh'
 import { useImageUploader } from '@/composables/useImageUploader'
+import { completeInitialPreviewBoot } from '@/composables/useInitialPreviewBoot'
 import { useSlashCommand } from '@/composables/useSlashCommand'
+import { contentHasMath, loadMathJax, MATHJAX_READY_EVENT } from '@/lib/preview/mathjax'
+import { fileUpload } from '@/services/upload'
+import { store } from '@/storage'
 import { useEditorStore } from '@/stores/editor'
 import { usePostStore } from '@/stores/post'
 import { useRenderStore } from '@/stores/render'
 import { useThemeStore } from '@/stores/theme'
 import { useUIStore } from '@/stores/ui'
-import { fileUpload } from '@/utils/file-upload'
-import { contentHasMath, loadMathJax, MATHJAX_READY_EVENT } from '@/utils/mathjax'
-import { checkImage, toBase64 } from '@/utils/shared-helpers'
-import { store } from '@/utils/storage'
 
 const SidebarAIToolbar = defineAsyncComponent(() => import('@/components/ai/SidebarAIToolbar.vue'))
 
@@ -53,7 +55,7 @@ function onWrapperContextMenuCapture(e: MouseEvent) {
 
 const { editor } = storeToRefs(editorStore)
 const { isDark } = storeToRefs(uiStore)
-const { posts, currentPostIndex } = storeToRefs(postStore)
+const { posts, currentPostIndex, currentPost } = storeToRefs(postStore)
 const {
   isMobile,
   enableImageReupload,
@@ -164,6 +166,7 @@ async function beforeImageUpload(file: File) {
   const isValidHost = imgHost === `default` || config
   if (!isValidHost) {
     toast.error(`请先配置 ${imgHost} 图床参数`)
+    toggleShowUploadImgDialog(true)
     return false
   }
 
@@ -446,18 +449,10 @@ function createFormTextArea(dom: HTMLDivElement) {
       themeCompartment.of(theme(isDark.value)),
       EditorView.updateListener.of((update) => {
         if (update.docChanged) {
-          const value = update.state.doc.toString()
           clearTimeout(changeTimer.value)
           changeTimer.value = setTimeout(() => {
             editorRefresh()
-
-            const currentPost = posts.value[currentPostIndex.value]
-            if (value === currentPost.content) {
-              return
-            }
-
-            currentPost.updateDatetime = new Date()
-            currentPost.content = value
+            commitEditorContentToPost()
           }, 300)
         }
       }),
@@ -496,9 +491,25 @@ async function preloadMathJaxIfNeeded(content: string) {
 
 let postSwitchGeneration = 0
 
+function commitEditorContentToPost() {
+  clearTimeout(changeTimer.value)
+  changeTimer.value = undefined
+  if (!codeMirrorView.value)
+    return
+
+  const value = codeMirrorView.value.state.doc.toString()
+  const post = posts.value[currentPostIndex.value]
+  if (!post || value === post.content)
+    return
+
+  post.updateDatetime = new Date()
+  post.content = value
+}
+
 onMounted(() => {
   const editorDom = editorRef.value
   if (editorDom == null) {
+    void completeInitialPreviewBoot()
     return
   }
 
@@ -514,12 +525,14 @@ onMounted(() => {
   void nextTick(async () => {
     const editorView = createFormTextArea(editorDom)
     editor.value = editorView
+    editorStore.registerContentFlush(commitEditorContentToPost)
 
     const content = posts.value[currentPostIndex.value]?.content ?? ``
     await preloadMathJaxIfNeeded(content)
 
     editorRefresh()
     mdLocalToRemote()
+    void completeInitialPreviewBoot()
   })
 
   document.addEventListener(`keydown`, handleGlobalKeydown, { passive: false, capture: false })
@@ -534,31 +547,45 @@ watch(isDark, () => {
   editorRefresh()
 })
 
-watch(currentPostIndex, () => {
+function syncEditorToPostContent(content: string) {
   if (!codeMirrorView.value)
     return
 
-  const currentPost = posts.value[currentPostIndex.value]
-  if (!currentPost)
+  const currentContent = codeMirrorView.value.state.doc.toString()
+  if (currentContent === content)
     return
 
-  const currentContent = codeMirrorView.value.state.doc.toString()
-  if (currentContent !== currentPost.content) {
-    const generation = ++postSwitchGeneration
-    codeMirrorView.value.dispatch({
-      changes: {
-        from: 0,
-        to: codeMirrorView.value.state.doc.length,
-        insert: currentPost.content,
-      },
-    })
-    void preloadMathJaxIfNeeded(currentPost.content).then(() => {
-      if (generation !== postSwitchGeneration)
-        return
-      editorRefresh()
-    })
-  }
+  const generation = ++postSwitchGeneration
+  codeMirrorView.value.dispatch({
+    changes: {
+      from: 0,
+      to: codeMirrorView.value.state.doc.length,
+      insert: content,
+    },
+  })
+  void preloadMathJaxIfNeeded(content).then(() => {
+    if (generation !== postSwitchGeneration)
+      return
+    editorRefresh()
+  })
+}
+
+watch(currentPostIndex, () => {
+  const post = posts.value[currentPostIndex.value]
+  if (!post)
+    return
+  syncEditorToPostContent(post.content)
 })
+
+/** 云端同步等外部写入 posts 时，当前文章 index 不变也需刷新编辑器 */
+watch(
+  () => currentPost.value?.content,
+  (content) => {
+    if (content == null)
+      return
+    syncEditorToPostContent(content)
+  },
+)
 
 // 历史记录的定时器
 const historyTimer = ref<ReturnType<typeof setTimeout>>()
@@ -582,6 +609,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  editorStore.unregisterContentFlush()
   window.removeEventListener(MATHJAX_READY_EVENT, handleMathJaxReady)
   clearTimeout(historyTimer.value)
   clearTimeout(changeTimer.value)

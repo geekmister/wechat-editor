@@ -14,9 +14,9 @@ import {
 import { altSign, ctrlSign, shiftSign } from '@md/shared/configs'
 import { redoAction, undoAction } from '@md/shared/editor'
 import { useEditorDocumentActions } from '@/composables/useEditorDocumentActions'
+import { copyPlain, readPlainFromClipboard } from '@/lib/browser/clipboard'
 import { useEditorStore } from '@/stores/editor'
 import { useUIStore } from '@/stores/ui'
-import { copyPlain } from '@/utils/clipboard'
 
 const props = withDefaults(defineProps<{
   asSub?: boolean
@@ -42,13 +42,9 @@ async function copyToClipboard() {
 }
 
 async function pasteFromClipboard() {
-  try {
-    const text = await navigator.clipboard.readText()
+  const text = await readPlainFromClipboard()
+  if (text !== null)
     editorStore.replaceSelection(text)
-  }
-  catch {
-    // 静默失败
-  }
 }
 
 // Undo/Redo
