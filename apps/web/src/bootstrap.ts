@@ -4,7 +4,8 @@ import { createApp } from 'vue'
 import { initStorage } from '@/storage'
 
 import AppRoot from './App.vue'
-import { setupComponents } from './utils/setup-components'
+import { scheduleInitialLoaderFallback } from './lib/bootstrap/dismiss-initial-loader'
+import { setupComponents } from './lib/bootstrap/setup-components'
 
 export async function bootstrap(): Promise<void> {
   initComponentDarkVars()
@@ -14,4 +15,5 @@ export async function bootstrap(): Promise<void> {
   const app = createApp(AppRoot)
   app.use(createPinia())
   app.mount(`#app`)
+  scheduleInitialLoaderFallback()
 }
